@@ -1,51 +1,80 @@
 ﻿using Application.Contracts;
 using Application.Models;
+using Microsoft.Extensions.Options;
+using MongoDB.Driver;
 
 namespace Services.Infrastructure
 {
     public class EquipmentRepository : IEquipmentRepository
     {
+        private readonly IMongoCollection<Equipment> _equipmentCollection;
+
+        public EquipmentRepository(IOptions<EquipmentDatabaseSettings> dbSettings)
+        {
+            var mongoClient = new MongoClient(dbSettings.Value.ConnectionString);
+
+            var mongoDatabase = mongoClient.GetDatabase(dbSettings.Value.DatabaseName);
+
+            _equipmentCollection = mongoDatabase.GetCollection<Equipment>(dbSettings.Value.CollectionName);
+        }
         public async Task<Result<IEnumerable<Equipment>>> GetAllAsync()
         {
-            // Simulate fetching data from a database or external source
-            return Result<IEnumerable<Equipment>>.Success(new List<Equipment>
-            {
-                new Equipment
-                {
-                    Id = Guid.NewGuid(),
-                    Status = OperationStatus.Running,
-                    Sector = "Manufacturing",
-                    CurrentOrders = new List<Order>
-                    {
-                        new Order { Id = Guid.NewGuid(), Status = OrderStatus.Scheduled },
-                        new Order { Id = Guid.NewGuid(), Status = OrderStatus.InProgress }
-                    }
-                },
-                new Equipment
-                {
-                    Id = Guid.NewGuid(),
-                    Status = OperationStatus.WindingDown,
-                    Sector = "Logistics",
-                    CurrentOrders = new List<Order>()
-                }
-            });
+            var equipments = await _equipmentCollection.Find(_ => true).ToListAsync();
+            return Result<IEnumerable<Equipment>>.Success(equipments);
         }
 
-        public async Task<Result> UpsertAsync(Equipment equipment)
+        public async Task<Result<Equipment>> GetByIdAsync(string id)
         {
-            // Simulate updating or inserting the equipment in a database
-            var equipments = await GetAllAsync();
-            var existingEquipment = equipments.Value!.FirstOrDefault(e => e.Id == equipment.Id);
-            if (existingEquipment != null)
+            var equipment = await _equipmentCollection.Find(e => e.Id == id).FirstOrDefaultAsync();
+            if (equipment == null)
             {
-                existingEquipment.Status = equipment.Status;
-                existingEquipment.Sector = equipment.Sector;
-                existingEquipment.CurrentOrders = equipment.CurrentOrders;
+                return Result<Equipment>.Failed($"Equipment with ID {id} not found.");
             }
-            else
+            return Result<Equipment>.Success(equipment);
+        }
+
+        public async Task<Result> UpsertEquipmentAsync(Equipment equipment)
+        {
+            var result = await GetByIdAsync(equipment.Id);
+            if (result.IsFailed)
             {
-                equipments.Value!.Append(equipment);
+                _equipmentCollection.InsertOne(equipment);
+                return Result.Success();
             }
+
+            var existingEquipment = result.Value;
+            _equipmentCollection.UpdateOne(
+                e => e.Id == equipment.Id,
+                Builders<Equipment>.Update
+                    .Set(e => e.Status, equipment.Status)
+                    .Set(e => e.Sector, equipment.Sector)
+                    .Set(e => e.UpdatedAt, DateTime.UtcNow)
+            );
+
+            return Result.Success();
+        }
+
+        public async Task<Result> ReplaceOrdersAsync(Equipment equipment)
+        {
+            if (equipment.CurrentOrders == null || !equipment.CurrentOrders.Any())
+            {
+                return Result.Failed("No orders provided to update.");
+            }
+
+            var result = await GetByIdAsync(equipment.Id);
+            if (result.IsFailed)
+            {
+                return Result.Failed($"Equipment with ID {equipment.Id} not found.");
+            }
+
+            var existingEquipment = result.Value;
+            _equipmentCollection.UpdateOne(
+                e => e.Id == equipment.Id,
+                Builders<Equipment>.Update
+                    .Set(e => e.CurrentOrders, equipment.CurrentOrders)
+                    .Set(e => e.UpdatedAt, DateTime.UtcNow)
+            );
+
             return Result.Success();
         }
     }

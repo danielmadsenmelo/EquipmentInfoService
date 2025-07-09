@@ -8,7 +8,8 @@ namespace Services.Installers
     {
         public static IServiceCollection InstallServices(this IServiceCollection services)
         {
-            services.AddScoped<IEquipmentRepository, EquipmentRepository>();
+            services.AddOptions<EquipmentDatabaseSettings>();
+            services.AddSingleton<IEquipmentRepository, EquipmentRepository>();
 
             return services;
         }
